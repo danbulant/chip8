@@ -139,9 +139,10 @@ impl Chip8 {
             return;
         } else if first == 2 {
             // call
-            debug_eprintln!("CALL {}", after_first);
+            debug_eprintln!("CALL {after_first} {after_first:#02x}");
             self.stack.push(self.pc);
             self.pc = after_first;
+            return;
         } else if first == 3 {
             // if eq
             debug_eprintln!("SE IF V{second} == {} SKIP", last_two);
