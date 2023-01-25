@@ -12,7 +12,7 @@ fn main() {
         Some(file_path) => {
             let mut file = File::open(file_path).unwrap();
             let mut data = Vec::new();
-            let len = file.read_to_end(&mut data).unwrap();
+            file.read_to_end(&mut data).unwrap();
 
             let mut chip8 = Chip8::new();
             chip8.load_rom(data);
@@ -29,7 +29,7 @@ type Address = u16;
 #[derive(Debug)]
 struct Chip8 {
     /// 4K memory
-    memory: [u8; 4096],
+    memory: [u8; 262144], // 2^18
     /// registers
     v: [u8; 16],
     /// current address
@@ -44,7 +44,7 @@ struct Chip8 {
     sound_timer: u8,
     /// graphics (64x32 black and white)
     display: [[bool; HEIGHT]; WIDTH],
-    start_time: Instant,
+    // start_time: Instant,
     last_processed_timers: Instant
 }
 
@@ -54,7 +54,7 @@ const HEIGHT: usize = 32;
 impl Chip8 {
     fn new() -> Chip8 {
         let mut c = Chip8 {
-            memory: [0; 4096],
+            memory: [0; 262144],
             v: [0; 16],
             i: 0,
             pc: 0x200,
@@ -62,7 +62,7 @@ impl Chip8 {
             delay_timer: 0,
             sound_timer: 0,
             display: [[false; HEIGHT]; WIDTH],
-            start_time: Instant::now(),
+            // start_time: Instant::now(),
             last_processed_timers: Instant::now()
         };
 
@@ -98,7 +98,7 @@ impl Chip8 {
         let first  = ((current & 0xF000) as u16 >> 12) as u8;
         let first_raw = (current & 0xF000) as u16;
         let second  = ((current & 0x0F00 as u16) >> 8 as u16) as u8;
-        let second_raw = (current & 0x0F00) as u16;
+        // let second_raw = (current & 0x0F00) as u16;
         let third   = ((current & 0x00F0) as u16 >> 4) as u8;
         let third_raw = (current & 0x00F0) as u16;
         let fourth  = (current & 0x000F) as u8;
@@ -166,7 +166,7 @@ impl Chip8 {
             self.v[second as usize] = last_two;
         } else if first == 7 {
             // ADD; Vx += NN
-            debug_eprintln!("ADD V{second} += {last_two:#x} ({last_two})");
+            debug_eprintln!("ADD V{second} += {last_two:#x} ({last_two}) => {:#x} ({})", self.v[second as usize] + last_two, self.v[second as usize] + last_two);
             self.v[second as usize] += last_two;
         } else if first == 8 {
             debug_eprintln!("eights");
@@ -220,7 +220,7 @@ impl Chip8 {
             // sprite (bit coded XOR (set bits flip the bit value)) from I
             // VF set to 1 if any bit is set to 0
 
-            debug_eprintln!("DRW X=V{second} Y=V{third} W=16 H={fourth}");
+            debug_eprintln!("DRW X=V{second} Y=V{third} W=16 H={fourth} I={:#x}", self.i);
 
             let x = self.v[second as usize] % (WIDTH as u8);
             let y = self.v[third as usize] % (HEIGHT as u8);
@@ -234,7 +234,7 @@ impl Chip8 {
                 let sprite_y = sprite_y;
                 let sprite_row = self.memory[self.i as usize + sprite_y];
                 let y = (sprite_y + y as usize) % HEIGHT;
-                debug_eprintln!("\n{:#b} ({:#x})", sprite_row, sprite_row);
+                // debug_eprintln!("\n{:#b} ({:#x})", sprite_row, sprite_row);
                 for b in 0..8 {
                     let x = (x as usize + b as usize) % WIDTH;
                     // println!("x{x} y{y}");
@@ -285,7 +285,7 @@ impl Chip8 {
                 debug_eprintln!("sound({second})");
                 self.sound_timer = self.v[second as usize];
             } else if last_two == 0x1E {
-                debug_eprintln!("I += V{second}");
+                debug_eprintln!("I += V{second} ({:#x}; {})", self.i + self.v[second as usize] as u16, self.i + self.v[second as usize] as u16);
                 self.i += self.v[second as usize] as u16;
             } else if last_two == 0x29 {
                 // I = sprite_addr[Vx]
