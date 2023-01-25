@@ -1,5 +1,0 @@
-
-pub enum Opcode {
-    DisplayClear
-}
-
