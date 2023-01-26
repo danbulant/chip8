@@ -1,6 +1,6 @@
 use std::env::args;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 use rand::prelude::*;
 use debug_print::{debug_eprint, debug_eprintln};
@@ -12,10 +12,14 @@ fn main() {
         Some(file_path) => {
             let mut file = File::open(file_path).unwrap();
             let mut data = Vec::new();
+            println!("read");
             file.read_to_end(&mut data).unwrap();
 
+            println!("init");
             let mut chip8 = Chip8::new();
+            println!("loading");
             chip8.load_rom(data);
+            println!("loaded");
             loop {
                 chip8.run_next();
             }
@@ -24,12 +28,12 @@ fn main() {
 }
 
 /// 12 bit address pointer
-type Address = u16;
+type Address = u32;
 
 #[derive(Debug)]
 struct Chip8 {
     /// 4K memory
-    memory: [u8; 262144], // 2^18
+    memory: Vec<u8>, // 2^18
     /// registers
     v: [u8; 16],
     /// current address
@@ -54,7 +58,7 @@ const HEIGHT: usize = 32;
 impl Chip8 {
     fn new() -> Chip8 {
         let mut c = Chip8 {
-            memory: [0; 262144],
+            memory: Vec::with_capacity(4096),
             v: [0; 16],
             i: 0,
             pc: 0x200,
@@ -67,7 +71,7 @@ impl Chip8 {
         };
 
         // initialize font
-        c.memory[0..80].clone_from_slice(&[
+        c.memory.write_all(&[
             0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
             0x20, 0x60, 0x20, 0x20, 0x70, // 1
             0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
@@ -84,13 +88,16 @@ impl Chip8 {
             0xE0, 0x90, 0x90, 0x90, 0xE0, // D
             0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
             0xF0, 0x80, 0xF0, 0x80, 0x80  // F
-        ]);
+        ]).expect("Failed to write font");
+
+        c.memory.resize(4096, 0);
 
         c
     }
 
     fn load_rom(&mut self, rom: Vec<u8>) {
-        self.memory[0x200..0x200+rom.len()].clone_from_slice(&*rom);
+        self.memory.resize(0x200, 0);
+        self.memory.extend_from_slice(&rom);
     }
 
     fn run_next(&mut self) {
@@ -104,13 +111,15 @@ impl Chip8 {
         let fourth  = (current & 0x000F) as u8;
         let fourth_raw = (current & 0x000F) as u16;
         let last_two = (third_raw|fourth_raw) as u8;
-        let after_first = current ^ (first_raw as Address);
+        let after_first = current ^ (first_raw as u16);
 
         debug_eprint!("{:#x} ", self.pc);
 
         if current == 0 {
-            dbg!(&self);
-            panic!("Null call {}", self.pc);
+            // dbg!(&self);
+            let mut file = File::create("dump").unwrap();
+            file.write_all(&self.memory).unwrap();
+            panic!("Null call {:#x} ({})", self.pc, self.pc);
         }
 
         // println!("{current:#04x} -> F{first_raw:#x} S{second_raw:#x} T{third_raw:#x} F{fourth_raw:#x} - !F={after_first:#x} {last_two:#x}");
@@ -132,26 +141,26 @@ impl Chip8 {
         } else if first == 1 {
             // jump
             debug_eprintln!("JP {after_first:#x} ({after_first})");
-            if after_first == self.pc {
+            if after_first == self.pc as u16 {
                 panic!("HALT! Jump to self (direct infinite loop)");
             }
-            self.pc = after_first;
+            self.pc = after_first as Address;
             return;
         } else if first == 2 {
             // call
             debug_eprintln!("CALL {after_first} {after_first:#02x}");
             self.stack.push(self.pc);
-            self.pc = after_first;
+            self.pc = after_first as Address;
             return;
         } else if first == 3 {
             // if eq
-            debug_eprintln!("SE IF V{second} == {} SKIP", last_two);
+            debug_eprintln!("SE IF V{second} == {} SKIP (={})", last_two, self.v[second as usize]);
             if self.v[second as usize] == last_two {
                 self.pc += 2;
             }
         } else if first == 4 {
             // if not eq
-            debug_eprintln!("SNE IF V{second} != {} SKIP", last_two);
+            debug_eprintln!("SNE IF V{second} != {} SKIP (={})", last_two, self.v[second as usize]);
             if self.v[second as usize] != last_two {
                 self.pc += 2;
             }
@@ -203,10 +212,10 @@ impl Chip8 {
         } else if first == 0xA {
             // I=NNN
             debug_eprintln!("LD I = {after_first:#x} ({after_first})");
-            self.i = after_first;
+            self.i = after_first as Address;
         } else if first == 0xB {
             debug_eprintln!("JP+ {} {after_first:#x} ({after_first})", self.v[0]);
-            self.pc = (self.v[0] as Address) + after_first;
+            self.pc = (self.v[0] as Address) + after_first as Address;
             return;
         } else if first == 0xC {
             // I=rand() & NN
@@ -220,7 +229,7 @@ impl Chip8 {
             // sprite (bit coded XOR (set bits flip the bit value)) from I
             // VF set to 1 if any bit is set to 0
 
-            debug_eprintln!("DRW X=V{second} Y=V{third} W=16 H={fourth} I={:#x}", self.i);
+            debug_eprintln!("DRW X=V{second} Y=V{third} W=16 H={fourth} I={:#x} ({})", self.i, self.i);
 
             let x = self.v[second as usize] % (WIDTH as u8);
             let y = self.v[third as usize] % (HEIGHT as u8);
@@ -272,21 +281,21 @@ impl Chip8 {
         } else if first == 0xF {
             if last_two == 0x07 {
                 // Vx = get_delay()
-                debug_eprintln!("V{second} = delay()");
+                debug_eprintln!("V{second} = delay() => {:#x} ({})", self.delay_timer, self.delay_timer);
                 self.v[second as usize] = self.delay_timer;
             } else if last_two == 0x0A {
                 // Vx = get_key()
                 debug_eprintln!("V{second} = key()");
                 self.v[second as usize] = 0; // TODO! implement keyboard
             } else if last_two == 0x15 {
-                debug_eprintln!("delay(V{second})");
+                debug_eprintln!("delay(V{second}) (V{second}={:#x}={})", self.v[second as usize], self.v[second as usize]);
                 self.delay_timer = self.v[second as usize];
             } else if last_two == 0x18 {
                 debug_eprintln!("sound({second})");
                 self.sound_timer = self.v[second as usize];
             } else if last_two == 0x1E {
-                debug_eprintln!("I += V{second} ({:#x}; {})", self.i + self.v[second as usize] as u16, self.i + self.v[second as usize] as u16);
-                self.i += self.v[second as usize] as u16;
+                debug_eprintln!("I += V{second} ({:#x}; {})", self.i + self.v[second as usize] as Address, self.i + self.v[second as usize] as Address);
+                self.i += self.v[second as usize] as Address;
             } else if last_two == 0x29 {
                 // I = sprite_addr[Vx]
                 // Characters 0x0-0xF are represented by a 8x5 font
@@ -302,14 +311,14 @@ impl Chip8 {
             } else if last_two == 0x55 {
                 // reg_dump(Vx, &I)
                 debug_eprintln!("reg_dump(V{second}, I)");
-                if (self.i+second as u16) as usize >= self.memory.len() {
+                if (self.i+second as Address) as usize >= self.memory.len() {
                     panic!("overflow with reg_dump");
                 }
                 self.memory[self.i as usize..second as usize].clone_from_slice(&self.v[0..second as usize])
             } else if last_two == 0x65 {
                 // reg_load(Vx, &I)
                 debug_eprintln!("reg_load(V{second}, I)");
-                if (self.i+second as u16) as usize >= self.memory.len() {
+                if (self.i+second as Address) as usize >= self.memory.len() {
                     panic!("overflow with reg_load");
                 }
                 self.v[0..second as usize].clone_from_slice(&self.memory[self.i as usize..second as usize]);
@@ -321,13 +330,17 @@ impl Chip8 {
         }
         let now = Instant::now();
         if now - self.last_processed_timers > Duration::from_millis(16) {
+            // println!("Processing timers");
             if self.sound_timer > 0 {
                 print!("\x07");
                 self.sound_timer -= 1;
             }
             if self.delay_timer > 0 {
                 self.delay_timer -= 1;
+                // println!("delay_timer: {}", self.delay_timer);
             }
+        } else {
+            // println!("Skipping timers, duration: {:?}", now - self.last_processed_timers);
         }
     }
 }
