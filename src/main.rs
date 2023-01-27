@@ -1,9 +1,15 @@
 use std::env::args;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::thread;
 use std::time::{Duration, Instant};
 use rand::prelude::*;
 use debug_print::{debug_eprint, debug_eprintln};
+
+enum Flags {
+    RenderOnClsOnly = 1,
+    DelayWait = 2
+}
 
 fn main() {
     let file_path = args().nth(1);
@@ -12,14 +18,18 @@ fn main() {
         Some(file_path) => {
             let mut file = File::open(file_path).unwrap();
             let mut data = Vec::new();
-            println!("read");
             file.read_to_end(&mut data).unwrap();
 
-            println!("init");
             let mut chip8 = Chip8::new();
-            println!("loading");
             chip8.load_rom(data);
-            println!("loaded");
+
+            if args().any(|x| x == "--render-on-cls-only") {
+                chip8.flags |= Flags::RenderOnClsOnly as u8;
+            }
+            if args().any(|x| x == "--delay-wait") {
+                chip8.flags |= Flags::DelayWait as u8;
+            }
+
             loop {
                 chip8.run_next();
             }
@@ -49,7 +59,11 @@ struct Chip8 {
     /// graphics (64x32 black and white)
     display: [[bool; HEIGHT]; WIDTH],
     // start_time: Instant,
-    last_processed_timers: Instant
+    last_processed_timers: Instant,
+
+    display_changed: bool,
+
+    flags: u8
 }
 
 const WIDTH: usize = 64;
@@ -67,7 +81,9 @@ impl Chip8 {
             sound_timer: 0,
             display: [[false; HEIGHT]; WIDTH],
             // start_time: Instant::now(),
-            last_processed_timers: Instant::now()
+            last_processed_timers: Instant::now(),
+            display_changed: false,
+            flags: 0
         };
 
         // initialize font
@@ -128,6 +144,9 @@ impl Chip8 {
             // syscalls
             if current == 0x00e0 {
                 debug_eprintln!("CLS");
+                if self.display_changed {
+                    self.render();
+                }
                 self.display = [[false; HEIGHT]; WIDTH];
             } else if current == 0x00ee {
                 if self.stack.is_empty() {
@@ -248,7 +267,7 @@ impl Chip8 {
                     let x = (x as usize + b as usize) % WIDTH;
                     // println!("x{x} y{y}");
                     self.display[x][y] ^= (sprite_row & (1 << (7-b))) > 0;
-                    // print!("{}", if (sprite_row & (1 << (7-b))) > 0 { "█" } else { " " });
+                    // debug_eprint!("{}", if (sprite_row & (1 << (7-b))) > 0 { "█" } else { " " });
                     // println!("");
                     if self.v[0xF] == 0 {
                         self.v[0xF] = if self.display[x][y] && (sprite_row & (1 << (7-b))) > 0 { 1 } else { 0 };
@@ -256,16 +275,7 @@ impl Chip8 {
                 }
             }
 
-            debug_eprintln!("\n-----------------------------------\n");
-
-            for y in 0..HEIGHT {
-                for x in 0..WIDTH {
-                    // println!("x{x} y{y}");
-                    print!("{}", if self.display[x][y] { "█" } else { " " });
-                }
-                println!();
-            }
-            debug_eprintln!("\n-----------------------------------\n");
+            self.display_changed = true;
         } else if first == 0xE {
             // Keyboard operations
 
@@ -290,6 +300,10 @@ impl Chip8 {
             } else if last_two == 0x15 {
                 debug_eprintln!("delay(V{second}) (V{second}={:#x}={})", self.v[second as usize], self.v[second as usize]);
                 self.delay_timer = self.v[second as usize];
+                if self.flags & Flags::DelayWait as u8 != 0 {
+                    spin_sleep::sleep(Duration::from_millis((1000 / 60) * (self.v[second as usize] as u64)));
+                    self.delay_timer = 0;
+                }
             } else if last_two == 0x18 {
                 debug_eprintln!("sound({second})");
                 self.sound_timer = self.v[second as usize];
@@ -329,18 +343,38 @@ impl Chip8 {
             panic!("Halted (Program counter over ROM length)");
         }
         let now = Instant::now();
-        if now - self.last_processed_timers > Duration::from_millis(16) {
-            // println!("Processing timers");
+        if now - self.last_processed_timers >= Duration::from_millis(15) {
+            debug_eprintln!("Processing timers (duration: {:?})", now - self.last_processed_timers);
             if self.sound_timer > 0 {
                 print!("\x07");
                 self.sound_timer -= 1;
             }
             if self.delay_timer > 0 {
+                debug_eprint!("delay_timer: {} - 1 => ", self.delay_timer);
                 self.delay_timer -= 1;
-                // println!("delay_timer: {}", self.delay_timer);
+                debug_eprintln!("{}", self.delay_timer);
             }
+            self.last_processed_timers = now;
+
+            if self.display_changed && self.flags & Flags::RenderOnClsOnly as u8 == 0 { self.render(); }
         } else {
             // println!("Skipping timers, duration: {:?}", now - self.last_processed_timers);
         }
+        // thread::sleep(Duration::from_micros(50));
+    }
+
+    fn render(&mut self) {
+        debug_eprintln!("\n-----------------------------------\n");
+
+        for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+        // println!("x{x} y{y}");
+        print!("{}", if self.display[x][y] { "█" } else { " " });
+        }
+        println!();
+        }
+        debug_eprintln!("\n-----------------------------------\n");
+
+        self.display_changed = false;
     }
 }
